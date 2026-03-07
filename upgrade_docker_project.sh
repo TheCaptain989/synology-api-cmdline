@@ -4,7 +4,7 @@
 #  https://github.com/TheCaptain989/synology-api-cmdline
 
 # Currently ONLY upgrades all upgradable images in a Docker project and then rebuilds the project.
-# TODO: Make everything more modular and add functions
+# TODO: Add functionality
 
 # Usage: ./upgrade_docker_project.sh --project <project_name>
 
