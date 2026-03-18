@@ -225,7 +225,7 @@ function build_project {
   local project_id="$1" # Ex: 6a35cb96-2227-419d-bf64-9c8e91c69410
 
   local response
-  response=$(call_api "SYNO.Docker.Project" "build_stream" "id=\"$project_id\"")
+  response=$(call_api "SYNO.Docker.Project" "build" "id=\"$project_id\"")
   if [ $? -ne 0 ]; then
     echo "Error: Failed to start project upgrade via API." >&2
     exit 2
@@ -247,7 +247,7 @@ function clean_project {
   local project_id="$1" # Ex: 6a35cb96-2227-419d-bf64-9c8e91c69410
   
   local response
-  response=$(call_api "SYNO.Docker.Project" "clean_stream" "id=\"$project_id\"")
+  response=$(call_api "SYNO.Docker.Project" "clean" "id=\"$project_id\"")
   if [ $? -ne 0 ]; then
     echo "Error: Failed to start project clean via API." >&2
     exit 2
