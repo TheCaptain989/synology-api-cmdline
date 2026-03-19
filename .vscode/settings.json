@@ -1,0 +1,15 @@
+{
+    "cSpell.words": [
+    ],
+    "cSpell.ignoreWords": [
+        "NOANSI",
+        "NOPRUNE",
+        "gsub",
+        "lidarr",
+        "radarr",
+        "sonarr",
+        "syno",
+        "synowebapi",
+        "tostring"
+    ]
+}

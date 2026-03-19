@@ -102,7 +102,7 @@ function call_api {
 
   local endpoint="$1" # Ex: SYNO.Docker.Project
   local method="$2"   # Ex: list
-  local -a syno_data_args=() # Use an array for susequent arguments
+  local -a syno_data_args=() # Use an array for subsequent arguments
 
   # Process additional arguments as key=value pairs
   shift 2
