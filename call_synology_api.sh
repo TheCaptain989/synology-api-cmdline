@@ -129,9 +129,11 @@ function process_command_line {
       ;;
       --no-ansi)
         export NOANSI="true"
+        shift
       ;;
       --no-prune)
         export NOPRUNE="true"
+        shift
       ;;
       *)
         echo_ansi "Error|Unknown option: $1" >&2
@@ -218,7 +220,7 @@ function call_api {
   success=$(echo "$api_response" | jq -crM '.success')
   if [ "$success" != "true" ]; then
     echo_ansi "Error: API did not return success" >&2
-    return_code=${return_code:-1}
+    return_code=1
   fi
 
   echo "$api_response"
@@ -343,7 +345,7 @@ function upgrade_container {
   local return_code=$?; [ $return_code -ne 0 ] && { return $return_code; }
 
   if ! [[ "$upgradable_images" == *"$image"* ]]; then
-    echo_ansi "Error: No upgrade is available for container image $image" >&2
+    echo_ansi "Warn: No upgrade is available for container image $image" >&2
     return 1
   fi
 
@@ -411,7 +413,7 @@ function clean_project {
   local project_id="$1" # Ex: project_id=6a35cb96-2227-419d-bf64-9c8e91c69410
   
   local response
-  response=$(call_api "SYNO.Docker.Project" "clean" "id=\"$project_id\"")
+  response=$(call_api "SYNO.Docker.Project" "clean_stream" "id=\"$project_id\"")
   local return_code=$?
   [ $return_code -ne 0 ] && { echo_ansi "Error: Failed to clean the project." >&2; return $return_code; }
 
