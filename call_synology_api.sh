@@ -11,6 +11,7 @@
 ### Functions
 function main {
   # Main script execution
+
   setup_ansi_colors
   process_command_line "$@"
   
@@ -37,7 +38,44 @@ function main {
 function usage {
   # Short usage
 
-  usage="$0 --project <project_name>"
+  usage="$0
+Shell script for cleanly managing Synology DSM 7 functions from the command line.
+Made to be called as a scheduled Task.
+
+Source and full documentation:
+  https://github.com/TheCaptain989/synology-api-cmdline/
+
+Usage:
+  call_synology_api.sh {--container|--project} <name>
+    {--start|--stop|--restart|--upgrade|--build|--clean}
+    [--no-prune]
+    [--no-ansi]
+
+Target and Arguments:
+  --container <name>
+        Name of the Docker container
+  --project <name>
+        Name of the Docker project
+  
+Actions:
+ Applicable to either Projects or Containers:
+  --start     # Starts the named item
+  --stop      # Stops the named item
+  --restart   # Restarts the named item
+  --upgrade   # Initiates an upgrade of the named item
+ Application to Projects only:
+  --build     # Creates and starts all containers in the project
+  --clean     # Stops and deletes all containers in the project
+
+Other:
+  --no-prune  # Do not prune old images during a project upgrade
+  --no-ansi   # Force disable ANSI color codes in terminal output
+
+Examples:
+  $0 --project my-project --upgrade
+
+  $0 --container plex --restart
+"
   echo "$usage" >&2
 }
 function process_command_line {
@@ -173,7 +211,14 @@ function call_api {
   api_response=$(synowebapi -s --exec api="$endpoint" version=1 method="$method" outfile=/dev/null "${syno_data_args[@]}")
   local return_code=$?
   if [ $return_code -ne 0 ]; then
-    echo_ansi "Error: API call failed with return code $return_code" >&2
+    echo_ansi "Error: synowebapi failed with return code $return_code" >&2
+  fi
+
+  local success
+  success=$(echo "$api_response" | jq -crM '.success')
+  if [ "$success" != "true" ]; then
+    echo_ansi "Error: API did not return success" >&2
+    return_code=${return_code:-1}
   fi
 
   echo "$api_response"
@@ -187,7 +232,7 @@ function get_project_id {
   local response
   response=$(call_api "SYNO.Docker.Project" "list")
   local return_code=$?
-  [ $return_code -ne 0 ] && { echo_ansi "Error: Failed to retrieve project list from API." >&2; return $return_code; }
+  [ $return_code -ne 0 ] && { echo_ansi "Error: Failed to retrieve project list." >&2; return $return_code; }
   
   local project_id
   project_id=$(echo "$response" | jq -crM '.data | to_entries | map((select(.value.name == "'$project_name'") | .value.id))[]')
@@ -206,9 +251,8 @@ function get_image {
   local response
   response=$(call_api "SYNO.Docker.Container" "get" "name=\"$container_name\"")
   local return_code=$?
-  [ $return_code -ne 0 ] && { echo_ansi "Error: Failed to retrieve container info from API." >&2; return $return_code; }
+  [ $return_code -ne 0 ] && { echo_ansi "Error: Failed to retrieve container info." >&2; return $return_code; }
   
-  echo $response >&2
   local image
   image=$(echo "$response" | jq -crM '.data.details.Config.Image')
 
@@ -225,6 +269,7 @@ function get_project_images {
 
   local response
   response=$(call_api "SYNO.Docker.Project" "get" "id=\"$project_id\"")
+  local return_code=$?
 
   # Check that the project is running
   local status
@@ -233,9 +278,7 @@ function get_project_images {
     echo_ansi "Error: Project is not running." >&2
     return 1
   fi
-
-  local return_code=$?
-  [ $return_code -ne 0 ] && { echo_ansi "Error: Failed to retrieve project info from API." >&2; return $return_code; }
+  [ $return_code -ne 0 ] && { echo_ansi "Error: Failed to retrieve project info." >&2; return $return_code; }
   
   local images
   images=$(echo "$response" | jq -crM '.data.containers[].Config.Image')
@@ -253,14 +296,7 @@ function start_container {
   local response
   response=$(call_api "SYNO.Docker.Container" "start" "name=\"$container_name\"")
   local return_code=$?
-  [ $return_code -ne 0 ] && { echo_ansi "Error: Failed to start the container via API." >&2; return $return_code; }
-
-  local success
-  success=$(echo "$response" | jq -crM '.success')
-  if [ "$success" != "true" ]; then
-    echo_ansi "Error: Container start failed" >&2
-    return 1
-  fi
+  [ $return_code -ne 0 ] && { echo_ansi "Error: Failed to start the container." >&2; return $return_code; }
 
   echo_ansi "Container start successful"
 }
@@ -272,15 +308,8 @@ function stop_container {
   local response
   response=$(call_api "SYNO.Docker.Container" "stop" "name=\"$container_name\"")
   local return_code=$?
-  [ $return_code -ne 0 ] && { echo_ansi "Error: Failed to stop the container via API." >&2; return $return_code; }
-
-  local success
-  success=$(echo "$response" | jq -crM '.success')
-  if [ "$success" != "true" ]; then
-    echo_ansi "Error: Container stop failed" >&2
-    return 1
-  fi
-
+  [ $return_code -ne 0 ] && { echo_ansi "Error: Failed to stop the container." >&2; return $return_code; }
+  
   echo_ansi "Container stop successful"
 }
 function restart_container {
@@ -291,14 +320,7 @@ function restart_container {
   local response
   response=$(call_api "SYNO.Docker.Container" "restart" "name=\"$container_name\"")
   local return_code=$?
-  [ $return_code -ne 0 ] && { echo_ansi "Error: Failed to restart the container via API." >&2; return $return_code; }
-
-  local success
-  success=$(echo "$response" | jq -crM '.success')
-  if [ "$success" != "true" ]; then
-    echo_ansi "Error: Container restart failed" >&2
-    return 1
-  fi
+  [ $return_code -ne 0 ] && { echo_ansi "Error: Failed to restart the container." >&2; return $return_code; }
 
   echo_ansi "Container restart successful"
 }
@@ -343,14 +365,7 @@ function start_project {
   local response
   response=$(call_api "SYNO.Docker.Project" "start" "id=\"$project_id\"")
   local return_code=$?
-  [ $return_code -ne 0 ] && { echo_ansi "Error: Failed to start the project via API." >&2; return $return_code; }
-
-  local success
-  success=$(echo "$response" | jq -crM '.success')
-  if [ "$success" != "true" ]; then
-    echo_ansi "Error: Project start failed" >&2
-    return 1
-  fi
+  [ $return_code -ne 0 ] && { echo_ansi "Error: Failed to start the project." >&2; return $return_code; }
 
   echo_ansi "Project start successful"
 }
@@ -362,14 +377,7 @@ function stop_project {
   local response
   response=$(call_api "SYNO.Docker.Project" "stop" "id=\"$project_id\"")
   local return_code=$?
-  [ $return_code -ne 0 ] && { echo_ansi "Error: Failed to stop the project via API." >&2; return $return_code; }
-
-  local success
-  success=$(echo "$response" | jq -crM '.success')
-  if [ "$success" != "true" ]; then
-    echo_ansi "Error: Project stop failed" >&2
-    return 1
-  fi
+  [ $return_code -ne 0 ] && { echo_ansi "Error: Failed to stop the project." >&2; return $return_code; }
 
   echo_ansi "Project stop successful"
 }
@@ -381,14 +389,7 @@ function restart_project {
   local response
   response=$(call_api "SYNO.Docker.Project" "restart" "id=\"$project_id\"")
   local return_code=$?
-  [ $return_code -ne 0 ] && { echo_ansi "Error: Failed to restart the project via API." >&2; return $return_code; }
-
-  local success
-  success=$(echo "$response" | jq -crM '.success')
-  if [ "$success" != "true" ]; then
-    echo_ansi "Error: Project restart failed" >&2
-    return 1
-  fi
+  [ $return_code -ne 0 ] && { echo_ansi "Error: Failed to restart the project." >&2; return $return_code; }
 
   echo_ansi "Project restart successful"
 }
@@ -400,14 +401,7 @@ function build_project {
   local response
   response=$(call_api "SYNO.Docker.Project" "build" "id=\"$project_id\"")
   local return_code=$?
-  [ $return_code -ne 0 ] && { echo_ansi "Error: Failed to build the project via API." >&2; return $return_code; }
-
-  local success
-  success=$(echo "$response" | jq -crM '.success')
-  if [ "$success" != "true" ]; then
-    echo_ansi "Error: Project build failed" >&2
-    return 1
-  fi
+  [ $return_code -ne 0 ] && { echo_ansi "Error: Failed to build the project." >&2; return $return_code; }
 
   echo_ansi "Project build successful"
 }
@@ -419,14 +413,7 @@ function clean_project {
   local response
   response=$(call_api "SYNO.Docker.Project" "clean" "id=\"$project_id\"")
   local return_code=$?
-  [ $return_code -ne 0 ] && { echo_ansi "Error: Failed to clean the project via API." >&2; return $return_code; }
-
-  local success
-  success=$(echo "$response" | jq -crM '.success')
-  if [ "$success" != "true" ]; then
-    echo_ansi "Error: Project clean failed" >&2
-    return 1
-  fi
+  [ $return_code -ne 0 ] && { echo_ansi "Error: Failed to clean the project." >&2; return $return_code; }
 
   echo_ansi "Project clean successful"
 }
@@ -482,7 +469,7 @@ function get_upgradable_images {
   local response
   response=$(call_api "SYNO.Docker.Image" "list" "limit=-1" "offset=0" "show_dsm=false")
   local return_code=$?
-  [ $return_code -ne 0 ] && { echo_ansi "Error: Failed to retrieve upgradable image list from API." >&2; return $return_code; }
+  [ $return_code -ne 0 ] && { echo_ansi "Error: Failed to retrieve upgradable image list." >&2; return $return_code; }
 
   local upgradable_images
   upgradable_images=$(echo "$response" | jq -crM '.data.images | map(select(.upgradable))[].repository')
@@ -506,7 +493,7 @@ function upgrade_images {
     local response
     response=$(call_api "SYNO.Docker.Image" "upgrade_start" "repository=\"$image\"")
     local return_code=$?
-    [ $return_code -ne 0 ] && { echo_ansi "Error: Failed to retrieve task ID from API for $image." >&2; continue; }
+    [ $return_code -ne 0 ] && { echo_ansi "Error: Failed to retrieve task ID for $image." >&2; continue; }
 
     local task_id
     task_id=$(echo "$response" | jq -crM ".data.task_id")
@@ -540,7 +527,7 @@ function check_upgrade_status {
   local response
   response=$(call_api "SYNO.Docker.Image" "upgrade_status" "task_id=\"$task_id\"")
   local return_code=$?
-  [ $return_code -ne 0 ] && { echo_ansi "Error: Failed to retrieve upgrade status from API for $task_id." >&2; return $return_code; }
+  [ $return_code -ne 0 ] && { echo_ansi "Error: Failed to retrieve upgrade status for $task_id." >&2; return $return_code; }
 
   local upgrade_finished
   upgrade_finished=$(echo "$response" | jq -crM ".data.finished")
@@ -552,14 +539,7 @@ function prune_images {
   local response
   response=$(call_api "SYNO.Docker.Image" "prune")
   local return_code=$?
-  [ $return_code -ne 0 ] && { echo_ansi "Error: Failed to prune images via API." >&2; return $return_code; }
-
-  local success
-  success=$(echo "$response" | jq -crM '.success')
-  if [ "$success" != "true" ]; then
-    echo_ansi "Error: Prune image failed" >&2
-    return 1
-  fi
+  [ $return_code -ne 0 ] && { echo_ansi "Error: Failed to prune images." >&2; return $return_code; }
 
   local message
   message=$(echo "$response" | jq -crM '(.data.ImagesDeleted|length) as $count | (.data.SpaceReclaimed | tostring | gsub("(?<=\\d)(?=(\\d{3})+(?!\\d))"; ",")) as $space | "\($count) images deleted saving \($space) bytes."')
