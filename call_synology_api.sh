@@ -73,6 +73,10 @@ function process_command_line {
         export ACTION="stop"
         shift
       ;;
+      --restart)
+        export ACTION="restart"
+        shift
+      ;;
       --upgrade)
         export ACTION="upgrade"
         shift
@@ -188,11 +192,58 @@ function get_project_id {
   local project_id
   project_id=$(echo "$response" | jq -crM '.data | to_entries | map((select(.value.name == "'$project_name'") | .value.id))[]')
 
-  if [ -z "$project_id" ]; then
+  if [ -z "$project_id" -o "$project_id" == "null" ]; then
     echo_ansi "Error: Could not find project ID for $project_name" >&2
     return 1
   fi
   echo "$project_id"
+}
+function get_image {
+  # Get the image for the specified docker container
+
+  local container_name="$1" # Ex: "radarr"
+
+  local response
+  response=$(call_api "SYNO.Docker.Container" "get" "name=\"$container_name\"")
+  local return_code=$?
+  [ $return_code -ne 0 ] && { echo_ansi "Error: Failed to retrieve container info from API." >&2; return $return_code; }
+  
+  echo $response >&2
+  local image
+  image=$(echo "$response" | jq -crM '.data.details.Config.Image')
+
+  if [ -z "$image" -o "$image" == "null" ]; then
+    echo_ansi "Error: Could not find image for container $container_name" >&2
+    return 1
+  fi
+  echo "$image"
+}
+function get_project_images {
+  # Get the image for the specified project
+
+  local project_id="$1" # Ex: project_id=6a35cb96-2227-419d-bf64-9c8e91c69410
+
+  local response
+  response=$(call_api "SYNO.Docker.Project" "get" "id=\"$project_id\"")
+
+  # Check that the project is running
+  local status
+  status=$(echo "$response" | jq -crM '.data.status')
+  if [ "$status" != "RUNNING" ]; then
+    echo_ansi "Error: Project is not running." >&2
+    return 1
+  fi
+
+  local return_code=$?
+  [ $return_code -ne 0 ] && { echo_ansi "Error: Failed to retrieve project info from API." >&2; return $return_code; }
+  
+  local images
+  images=$(echo "$response" | jq -crM '.data.containers[].Config.Image')
+  if [ -z "$images" ]; then
+    echo_ansi "Error: Could not find images for project." >&2
+    return 1
+  fi
+  echo "$images"
 }
 function start_container {
   # Start the container
@@ -206,13 +257,12 @@ function start_container {
 
   local success
   success=$(echo "$response" | jq -crM '.success')
-
-  if [ "$success" == "true" ]; then
-    echo "Container start successful"
-  else
-    echo "Container start failed"
+  if [ "$success" != "true" ]; then
+    echo_ansi "Error: Container start failed" >&2
     return 1
   fi
+
+  echo_ansi "Container start successful"
 }
 function stop_container {
   # Stop the container
@@ -226,13 +276,64 @@ function stop_container {
 
   local success
   success=$(echo "$response" | jq -crM '.success')
-
-  if [ "$success" == "true" ]; then
-    echo "Container stop successful"
-  else
-    echo "Container stop failed"
+  if [ "$success" != "true" ]; then
+    echo_ansi "Error: Container stop failed" >&2
     return 1
   fi
+
+  echo_ansi "Container stop successful"
+}
+function restart_container {
+  # Restart the container
+
+  local container_name="$1" # Ex: radarr
+
+  local response
+  response=$(call_api "SYNO.Docker.Container" "restart" "name=\"$container_name\"")
+  local return_code=$?
+  [ $return_code -ne 0 ] && { echo_ansi "Error: Failed to restart the container via API." >&2; return $return_code; }
+
+  local success
+  success=$(echo "$response" | jq -crM '.success')
+  if [ "$success" != "true" ]; then
+    echo_ansi "Error: Container restart failed" >&2
+    return 1
+  fi
+
+  echo_ansi "Container restart successful"
+}
+function upgrade_container {
+  # Upgrade the container
+
+  local container_name="$1" # Ex: radarr
+  echo "-== Starting upgrade process for $container_name container... ==-"
+
+  # Get container image
+  local image
+  image=$(get_image "$container_name")
+  local return_code=$?; [ $return_code -ne 0 ] && { return $return_code; }
+  image="${image%%:*}"
+  echo "Container image: $image"
+
+  # Get list of upgradable images
+  local upgradable_images
+  upgradable_images=$(get_upgradable_images)
+  local return_code=$?; [ $return_code -ne 0 ] && { return $return_code; }
+
+  if ! [[ "$upgradable_images" == *"$image"* ]]; then
+    echo_ansi "Error: No upgrade is available for container image $image" >&2
+    return 1
+  fi
+
+  # Upgrade upgradable image
+  upgrade_images "$image"
+  local return_code=$?; [ $return_code -ne 0 ] && { return $return_code; }
+
+  # Restart container
+  restart_container "$container_name"
+  local return_code=$?; [ $return_code -ne 0 ] && { return $return_code; }
+
+  echo "-== Upgrade process completed for $container_name container! ==-"
 }
 function start_project {
   # Start the project
@@ -246,13 +347,12 @@ function start_project {
 
   local success
   success=$(echo "$response" | jq -crM '.success')
-
-  if [ "$success" == "true" ]; then
-    echo "Project start successful"
-  else
-    echo "Project start failed"
+  if [ "$success" != "true" ]; then
+    echo_ansi "Error: Project start failed" >&2
     return 1
   fi
+
+  echo_ansi "Project start successful"
 }
 function stop_project {
   # Stop the project
@@ -266,13 +366,31 @@ function stop_project {
 
   local success
   success=$(echo "$response" | jq -crM '.success')
-
-  if [ "$success" == "true" ]; then
-    echo "Project stop successful"
-  else
-    echo "Project stop failed"
+  if [ "$success" != "true" ]; then
+    echo_ansi "Error: Project stop failed" >&2
     return 1
   fi
+
+  echo_ansi "Project stop successful"
+}
+function restart_project {
+  # Restart the project
+
+  local project_id="$1" # Ex: project_id=6a35cb96-2227-419d-bf64-9c8e91c69410
+
+  local response
+  response=$(call_api "SYNO.Docker.Project" "restart" "id=\"$project_id\"")
+  local return_code=$?
+  [ $return_code -ne 0 ] && { echo_ansi "Error: Failed to restart the project via API." >&2; return $return_code; }
+
+  local success
+  success=$(echo "$response" | jq -crM '.success')
+  if [ "$success" != "true" ]; then
+    echo_ansi "Error: Project restart failed" >&2
+    return 1
+  fi
+
+  echo_ansi "Project restart successful"
 }
 function build_project {
   # Build the project
@@ -286,13 +404,12 @@ function build_project {
 
   local success
   success=$(echo "$response" | jq -crM '.success')
-
-  if [ "$success" == "true" ]; then
-    echo "Project build successful"
-  else
-    echo "Project build failed"
+  if [ "$success" != "true" ]; then
+    echo_ansi "Error: Project build failed" >&2
     return 1
   fi
+
+  echo_ansi "Project build successful"
 }
 function clean_project {
   # Clean the project (stop and delete containers)
@@ -304,7 +421,14 @@ function clean_project {
   local return_code=$?
   [ $return_code -ne 0 ] && { echo_ansi "Error: Failed to clean the project via API." >&2; return $return_code; }
 
-  echo "$response"
+  local success
+  success=$(echo "$response" | jq -crM '.success')
+  if [ "$success" != "true" ]; then
+    echo_ansi "Error: Project clean failed" >&2
+    return 1
+  fi
+
+  echo_ansi "Project clean successful"
 }
 function upgrade_project {
   # Upgrade the project
@@ -313,14 +437,31 @@ function upgrade_project {
   echo "-== Starting upgrade process for $PROJECT_NAME project... ==-"
   echo "Docker Project ID: $project_id"
 
-  # Get list of upgradable images in the project
+  # Get project images
+  local project_images
+  project_images=$(get_project_images "$project_id")
+  local return_code=$?; [ $return_code -ne 0 ] && { return $return_code; }
+
+  # Get list of upgradable images
   local upgradable_images
   upgradable_images=$(get_upgradable_images)
   local return_code=$?; [ $return_code -ne 0 ] && { return $return_code; }
-  printf "Upgradable Images: %s" "$upgradable_images" | tr "\n" ","; echo ""
+
+  # Build arry of images that are ready to be upgraded
+  local upgrade_image_list
+  while IFS= read -r image; do
+    if [[ "$upgradable_images" == *"$image"* ]]; then
+      upgrade_image_list+="${image}$'\n'"
+    fi    
+  done <<< "$project_images"
+  if [ -z "$upgrade_image_list" ]; then
+    echo_ansi "Warn: Project contained no upgradeable images"
+    return 1
+  fi
+  printf "Upgradable Images: %s" "$upgrade_image_list" | tr "\n" ","; echo ""
 
   # Upgrade all upgradable images in the project
-  upgrade_images "$upgradable_images"
+  upgrade_images "$upgrade_image_list"
   local return_code=$?; [ $return_code -ne 0 ] && { return $return_code; }
 
   # Rebuild the project to apply the image upgrades
@@ -354,7 +495,7 @@ function get_upgradable_images {
   echo "$upgradable_images"
 }
 function upgrade_images {
-  # Upgrade all upgradable images
+  # Upgrade upgradable images
 
   local upgradable_images="$1" # Ex: "linuxserver/sonarr\nlinuxserver/radarr\nlinuxserver/lidarr"
 
@@ -412,7 +553,14 @@ function prune_images {
   response=$(call_api "SYNO.Docker.Image" "prune")
   local return_code=$?
   [ $return_code -ne 0 ] && { echo_ansi "Error: Failed to prune images via API." >&2; return $return_code; }
-  
+
+  local success
+  success=$(echo "$response" | jq -crM '.success')
+  if [ "$success" != "true" ]; then
+    echo_ansi "Error: Prune image failed" >&2
+    return 1
+  fi
+
   local message
   message=$(echo "$response" | jq -crM '(.data.ImagesDeleted|length) as $count | (.data.SpaceReclaimed | tostring | gsub("(?<=\\d)(?=(\\d{3})+(?!\\d))"; ",")) as $space | "\($count) images deleted saving \($space) bytes."')
   echo "$message"
