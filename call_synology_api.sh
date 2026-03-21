@@ -401,7 +401,7 @@ function build_project {
   local project_id="$1" # Ex: project_id=6a35cb96-2227-419d-bf64-9c8e91c69410
 
   local response
-  response=$(call_api "SYNO.Docker.Project" "build" "id=\"$project_id\"")
+  response=$(call_api "SYNO.Docker.Project" "build_stream" "id=\"$project_id\"")
   local return_code=$?
   [ $return_code -ne 0 ] && { echo_ansi "Error: Failed to build the project." >&2; return $return_code; }
 
@@ -436,13 +436,15 @@ function upgrade_project {
   upgradable_images=$(get_upgradable_images)
   local return_code=$?; [ $return_code -ne 0 ] && { return $return_code; }
 
-  # Build arry of images that are ready to be upgraded
+  # Build array of images that are ready to be upgraded
   local upgrade_image_list
   while IFS= read -r image; do
+    image=${image%:*}
     if [[ "$upgradable_images" == *"$image"* ]]; then
-      upgrade_image_list+="${image}$'\n'"
+      upgrade_image_list+="${image}"$'\n'
     fi    
   done <<< "$project_images"
+  upgrade_image_list="${upgrade_image_list%$'\n'}"  
   if [ -z "$upgrade_image_list" ]; then
     echo_ansi "Warn: Project contained no upgradeable images"
     return 1
