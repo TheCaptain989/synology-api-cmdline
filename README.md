@@ -8,8 +8,7 @@ The syntax for the command-line is:
 
 ```shell
 call_synology_api.sh {--container|--project} <name>
-    {--start|--stop|--restart|--upgrade|--build|--clean}
-    [--no-prune]
+    {--start|--stop|--restart|--update|--build|--clean}
     [--no-ansi]
 ```
 
@@ -22,17 +21,16 @@ Option|Argument|Description
 `--start`||Starts the named item
 `--stop`||Stops the named item
 `--restart`||Restarts the named item
-`--upgrade`||Initiates an upgrade of the named item
+`--update`||Initiates an update of the named item
 `--build`||Creates and starts all containers in the project<br/>Only applicable to Projects
 `--clean`||Stops and deletes all containers in the project<br/>Only applicable to Projects
-`--no-prune`||Do not prune old images during a project upgrade
 `--no-ansi`||Force disable ANSI color codes in terminal output
 
 ## Examples
 
 ```shell
-  call_synology_api.sh --project my-project --upgrade
-                            # Upgrades "my-project"
+  call_synology_api.sh --project my-project --update
+                            # Updates "my-project"
   call_synology_api.sh --container plex --restart
                             # Restarts plex
 ```

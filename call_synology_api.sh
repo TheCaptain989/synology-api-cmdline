@@ -6,7 +6,7 @@
 # Exit codes
 #  0 - Success
 #  1 - Unknown command-line argument
-#  2 - API error (e.g. project not found, upgrade failed, etc.)
+#  2 - API error (e.g. project not found, update failed, etc.)
 
 ### Functions
 function main {
@@ -47,8 +47,7 @@ Source and full documentation:
 
 Usage:
   call_synology_api.sh {--container|--project} <name>
-    {--start|--stop|--restart|--upgrade|--build|--clean}
-    [--no-prune]
+    {--start|--stop|--restart|--update|--build|--clean}
     [--no-ansi]
 
 Target and Arguments:
@@ -62,17 +61,16 @@ Actions:
   --start     # Starts the named item
   --stop      # Stops the named item
   --restart   # Restarts the named item
-  --upgrade   # Initiates an upgrade of the named item
+  --update   # Initiates an update of the named item
  Application to Projects only:
   --build     # Creates and starts all containers in the project
   --clean     # Stops and deletes all containers in the project
 
 Other:
-  --no-prune  # Do not prune old images during a project upgrade
   --no-ansi   # Force disable ANSI color codes in terminal output
 
 Examples:
-  $0 --project my-project --upgrade
+  $0 --project my-project --update
 
   $0 --container plex --restart
 "
@@ -115,8 +113,8 @@ function process_command_line {
         export ACTION="restart"
         shift
       ;;
-      --upgrade)
-        export ACTION="upgrade"
+      --update)
+        export ACTION="update"
         shift
       ;;
       --build)
@@ -129,10 +127,6 @@ function process_command_line {
       ;;
       --no-ansi)
         export NOANSI="true"
-        shift
-      ;;
-      --no-prune)
-        export NOPRUNE="true"
         shift
       ;;
       *)
@@ -326,11 +320,11 @@ function restart_container {
 
   echo_ansi "Container restart successful"
 }
-function upgrade_container {
-  # Upgrade the container
+function update_container {
+  # Update the container
 
   local container_name="$1" # Ex: radarr
-  echo "-== Starting upgrade process for $container_name container... ==-"
+  echo "-== Starting update process for $container_name container... ==-"
 
   # Get container image
   local image
@@ -345,19 +339,15 @@ function upgrade_container {
   local return_code=$?; [ $return_code -ne 0 ] && { return $return_code; }
 
   if ! [[ "$upgradable_images" == *"$image"* ]]; then
-    echo_ansi "Warn: No upgrade is available for container image $image" >&2
+    echo_ansi "Warn: No update is available for container image $image" >&2
     return 1
   fi
 
-  # Upgrade upgradable image
-  upgrade_images "$image"
+  # Update upgradable image
+  update_image "$image"
   local return_code=$?; [ $return_code -ne 0 ] && { return $return_code; }
 
-  # Restart container
-  restart_container "$container_name"
-  local return_code=$?; [ $return_code -ne 0 ] && { return $return_code; }
-
-  echo "-== Upgrade process completed for $container_name container! ==-"
+  echo "-== Update process completed for $container_name container! ==-"
 }
 function start_project {
   # Start the project
@@ -419,11 +409,11 @@ function clean_project {
 
   echo_ansi "Project clean successful"
 }
-function upgrade_project {
-  # Upgrade the project
+function update_project {
+  # Update the project
 
   local project_id="$1" # Ex: project_id=6a35cb96-2227-419d-bf64-9c8e91c69410
-  echo "-== Starting upgrade process for $PROJECT_NAME project... ==-"
+  echo "-== Starting update process for $PROJECT_NAME project... ==-"
   echo "Docker Project ID: $project_id"
 
   # Get project images
@@ -436,36 +426,26 @@ function upgrade_project {
   upgradable_images=$(get_upgradable_images)
   local return_code=$?; [ $return_code -ne 0 ] && { return $return_code; }
 
-  # Build array of images that are ready to be upgraded
-  local upgrade_image_list
+  # Build array of images that are ready to be updated
+  local update_image_list
   while IFS= read -r image; do
     image=${image%:*}
     if [[ "$upgradable_images" == *"$image"* ]]; then
-      upgrade_image_list+="${image}"$'\n'
+      update_image_list+="${image}"$'\n'
     fi    
   done <<< "$project_images"
-  upgrade_image_list="${upgrade_image_list%$'\n'}"  
-  if [ -z "$upgrade_image_list" ]; then
-    echo_ansi "Warn: Project contained no upgradeable images"
+  update_image_list="${update_image_list%$'\n'}"  
+  if [ -z "$update_image_list" ]; then
+    echo_ansi "Warn: Project contained no updatable images"
     return 1
   fi
-  printf "Upgradable Images: %s" "$upgrade_image_list" | tr "\n" ","; echo ""
+  printf "Updatable Images: %s" "$update_image_list" | tr "\n" ","; echo ""
 
-  # Upgrade all upgradable images in the project
-  upgrade_images "$upgrade_image_list"
+  # Update all updatable images in the project
+  update_image "$update_image_list"
   local return_code=$?; [ $return_code -ne 0 ] && { return $return_code; }
 
-  # Rebuild the project to apply the image upgrades
-  build_project "$project_id"
-  local return_code=$?; [ $return_code -ne 0 ] && { return $return_code; }
-
-  if [ -z "$NOPRUNE" ]; then
-    # Remove old images that are no longer used by any containers
-    prune_images
-    local return_code=$?; [ $return_code -ne 0 ] && { return $return_code; }
-  fi
-
-  echo "-== Upgrade process completed for $PROJECT_NAME project! ==-"
+  echo "-== Update process completed for $PROJECT_NAME project! ==-"
 }
 function get_upgradable_images {
   # Get a list of upgradable images in the project
@@ -473,7 +453,7 @@ function get_upgradable_images {
   local response
   response=$(call_api "SYNO.Docker.Image" "list" "limit=-1" "offset=0" "show_dsm=false")
   local return_code=$?
-  [ $return_code -ne 0 ] && { echo_ansi "Error: Failed to retrieve upgradable image list." >&2; return $return_code; }
+  [ $return_code -ne 0 ] && { echo_ansi "Error: Failed to retrieve image list." >&2; return $return_code; }
 
   local upgradable_images
   upgradable_images=$(echo "$response" | jq -crM '.data.images | map(select(.upgradable))[].repository')
@@ -485,8 +465,8 @@ function get_upgradable_images {
 
   echo "$upgradable_images"
 }
-function upgrade_images {
-  # Upgrade upgradable images
+function update_image {
+  # Update upgradable images
 
   local upgradable_images="$1" # Ex: "linuxserver/sonarr\nlinuxserver/radarr\nlinuxserver/lidarr"
 
@@ -502,40 +482,40 @@ function upgrade_images {
     local task_id
     task_id=$(echo "$response" | jq -crM ".data.task_id")
     
-    echo -n "Upgrading $image"
-    local upgrade_finished=false  
-    while [ "$upgrade_finished" == "false" ]; do
+    echo -n "Updating $image"
+    local update_finished=false  
+    while [ "$update_finished" == "false" ]; do
       echo -n "."
       # Check state
-      upgrade_finished=$(check_upgrade_status "$task_id")
-      if [ "$upgrade_finished" != "true" -a "$upgrade_finished" != "null" ]; then
+      update_finished=$(check_update_status "$task_id")
+      if [ "$update_finished" != "true" -a "$update_finished" != "null" ]; then
         # Wait a few seconds before checking again to avoid spamming the API
         sleep 5
       fi
     done
-    if [ "$upgrade_finished" == "true" ]; then
+    if [ "$update_finished" == "true" ]; then
       echo " done"
     else
       echo " error"
-      echo_ansi "Error: Upgrade failed for $image with status $upgrade_finished" >&2
+      echo_ansi "Error: Update failed for $image with status $update_finished" >&2
       exit_code=2
     fi
   done <<< "$upgradable_images"
   return $exit_code
 }
-function check_upgrade_status {
-  # Check the upgrade status of a given task ID
+function check_update_status {
+  # Check the update status of a given task ID
 
-  local task_id="$1" # ID returned from upgrade_start API call
+  local task_id="$1" # ID returned from update_start API call
 
   local response
   response=$(call_api "SYNO.Docker.Image" "upgrade_status" "task_id=\"$task_id\"")
   local return_code=$?
-  [ $return_code -ne 0 ] && { echo_ansi "Error: Failed to retrieve upgrade status for $task_id." >&2; return $return_code; }
+  [ $return_code -ne 0 ] && { echo_ansi "Error: Failed to retrieve update status for $task_id." >&2; return $return_code; }
 
-  local upgrade_finished
-  upgrade_finished=$(echo "$response" | jq -crM ".data.finished")
-  echo "$upgrade_finished"
+  local update_finished
+  update_finished=$(echo "$response" | jq -crM ".data.finished")
+  echo "$update_finished"
 }
 function prune_images {
   # Clean up unused images
