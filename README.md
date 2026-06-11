@@ -7,23 +7,25 @@ Supports general Docker container management functions:
 The syntax for the command-line is:
 
 ```shell
-call_synology_api.sh {--container|--project} <name>
-    {--start|--stop|--restart|--update|--build|--clean}
+call_synology_api.sh {--container|--project|--image} <name>
+    {--start|--stop|--restart|--update|--build|--clean|--prune}
     [--no-ansi]
 ```
 
-You must specify either `--container` or `--project`, followed by an action. Not all actions are available for both projects and containers. (Ex: You can't build a container.)
+You must specify either `--container`, `--project`, or `--image` followed by an action. Not all actions are available for all target types. (Ex: You can't build a container.)
 
 Option|Argument|Description
 ---|---|---
 `--container`|`<name>`|Name of the Docker container
 `--project`|`<name>`|Name of the Docker project
+`--image`|`<name>`|Name of the Docker image
 `--start`||Starts the named item
 `--stop`||Stops the named item
 `--restart`||Restarts the named item
 `--update`||Initiates an update of the named item
 `--build`||Creates and starts all containers in the project<br/>Only applicable to Projects
 `--clean`||Stops and deletes all containers in the project<br/>Only applicable to Projects
+`--prune`||Removes unused images
 `--no-ansi`||Force disable ANSI color codes in terminal output
 
 ## Examples

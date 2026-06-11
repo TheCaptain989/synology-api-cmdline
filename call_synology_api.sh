@@ -27,6 +27,16 @@ function main {
     local target="container"
     local function_arg
     function_arg="$CONTAINER_NAME"
+  elif [ -n "$IMAGE_NAME" ]; then
+    local target="image"
+    local function_arg
+    function_arg="$IMAGE_NAME"
+  fi
+
+  # Display error message if function does not exist for the given action and target
+  if ! declare -f "${called_function}" > /dev/null; then
+    echo_ansi "Error: Action $ACTION is not supported for target $target." >&2
+    exit 1
   fi
 
   # Execute function
@@ -46,8 +56,8 @@ Source and full documentation:
   https://github.com/TheCaptain989/synology-api-cmdline/
 
 Usage:
-  call_synology_api.sh {--container|--project} <name>
-    {--start|--stop|--restart|--update|--build|--clean}
+  call_synology_api.sh {--container|--project|--image} <name>
+    {--start|--stop|--restart|--update|--build|--clean|--prune}
     [--no-ansi]
 
 Target and Arguments:
@@ -55,16 +65,21 @@ Target and Arguments:
         Name of the Docker container
   --project <name>
         Name of the Docker project
-  
+  --image <name>
+        Name of the Docker image (repository name, e.g. linuxserver/sonarr)
+        Does not include tag (e.g. :latest)
 Actions:
+ Applicable to either Projects, Containers, or Images:
+  --update    # Initiates an update of the named item
  Applicable to either Projects or Containers:
   --start     # Starts the named item
   --stop      # Stops the named item
   --restart   # Restarts the named item
-  --update   # Initiates an update of the named item
- Application to Projects only:
+ Applicable to Projects only:
   --build     # Creates and starts all containers in the project
   --clean     # Stops and deletes all containers in the project
+ Applicable to Images only:
+  --prune     # Removes unused images
 
 Other:
   --no-ansi   # Force disable ANSI color codes in terminal output
@@ -81,6 +96,16 @@ function process_command_line {
 
   while (( "$#" )); do
     case "$1" in
+      --project)
+        # Docker project name
+        if [ -z "$2" ] || [ ${2:0:1} = "-" ]; then
+          echo_ansi "Error: Invalid option: $1 requires an argument." >&2
+          usage
+          exit 1
+        fi
+        export PROJECT_NAME="$2"
+        shift 2
+      ;;
       --container)
         # Docker container name
         if [ -z "$2" ] || [ ${2:0:1} = "-" ]; then
@@ -91,14 +116,14 @@ function process_command_line {
         export CONTAINER_NAME="$2"
         shift 2
       ;;
-      --project)
-        # Docker project name
+      --image)
+        # Docker image name
         if [ -z "$2" ] || [ ${2:0:1} = "-" ]; then
           echo_ansi "Error: Invalid option: $1 requires an argument." >&2
           usage
           exit 1
         fi
-        export PROJECT_NAME="$2"
+        export IMAGE_NAME="$2"
         shift 2
       ;;
       --start)
@@ -125,6 +150,10 @@ function process_command_line {
         export ACTION="clean"
         shift
       ;;
+      --prune)
+        export ACTION="prune"
+        shift
+      ;;
       --no-ansi)
         export NOANSI="true"
         shift
@@ -143,8 +172,8 @@ function process_command_line {
     exit 1
   fi
 
-  if [ -z "$PROJECT_NAME" -a -z "$CONTAINER_NAME" ]; then
-    echo_ansi "Error: --project or --container option are required." >&2
+  if [ -z "$PROJECT_NAME" -a -z "$CONTAINER_NAME" -a -z "$IMAGE_NAME" ]; then
+    echo_ansi "Error: --project, --container, or --image option is required." >&2
     usage
     exit 1
   fi
@@ -517,7 +546,7 @@ function check_update_status {
   update_finished=$(echo "$response" | jq -crM ".data.finished")
   echo "$update_finished"
 }
-function prune_images {
+function prune_image {
   # Clean up unused images
 
   local response
