@@ -8,7 +8,7 @@ The syntax for the command-line is:
 
 ```shell
 call_synology_api.sh {--container|--project|--image} <name>
-    {--start|--stop|--restart|--update|--build|--clean|--prune}
+    {--start|--stop|--force-stop|--restart|--reset|--update|--build|--clean|--prune}
     [--no-ansi]
 ```
 
@@ -21,12 +21,28 @@ Option|Argument|Description
 `--image`|`<name>`|Name of the Docker image
 `--start`||Starts the named item
 `--stop`||Stops the named item
+`--force-stop`||Forcefully stops the named item
 `--restart`||Restarts the named item
+`--reset`||Resets the named item
 `--update`||Initiates an update of the named item
 `--build`||Creates and starts all containers in the project<br/>Only applicable to Projects
 `--clean`||Stops and deletes all containers in the project<br/>Only applicable to Projects
 `--prune`||Removes unused images
 `--no-ansi`||Force disable ANSI color codes in terminal output
+
+### Matrix of supported actions:
+
+Action|Container|Project|Image
+---|---|---|---
+Start|✅|✅|❌
+Stop|✅|✅|❌
+Restart|✅|✅|❌
+Force-Stop|✅|❌|❌
+Reset|✅|❌|❌
+Update|✅|✅|✅
+Build|❌|✅|❌
+Clean|❌|✅|❌
+Prune|❌|❌|✅
 
 ## Examples
 
