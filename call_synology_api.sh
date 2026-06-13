@@ -32,15 +32,15 @@ function main {
     local function_arg
     function_arg="$IMAGE_NAME"
   fi
+  local called_function="${ACTION}_${target}"
 
   # Display error message if function does not exist for the given action and target
   if ! declare -f "${called_function}" > /dev/null; then
-    echo_ansi "Error: Action $ACTION is not supported for target $target." >&2
+    echo_ansi "Error: ${ACTION^} is not supported for ${target^}." >&2
     exit 1
   fi
 
   # Execute function
-  local called_function="${ACTION}_${target}"
   $called_function "$function_arg"
   local return_code=$?
   [ $return_code -ne 0 ] && { exit $return_code; }
@@ -182,7 +182,7 @@ function setup_ansi_colors {
   # Setup ANSI color codes and determine when to use them.
   # Colors should only be used when the script is writing to an interactive terminal.
 
-  export ANSI_RED='\033[0;31m'
+  export ANSI_RED='\033[1;31m'
   export ANSI_GREEN='\033[0;32m'
   export ANSI_YELLOW='\033[0;33m'
   export ANSI_CYAN='\033[0;36m'
