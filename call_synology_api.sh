@@ -57,7 +57,7 @@ Source and full documentation:
 
 Usage:
   call_synology_api.sh {--container|--project|--image} <name>
-    {--start|--stop|--restart|--update|--build|--clean|--prune}
+    {--start|--stop|--force-stop|--restart|--reset|--update|--build|--clean|--prune}
     [--no-ansi]
 
 Target and Arguments:
@@ -70,16 +70,19 @@ Target and Arguments:
         Does not include tag (e.g. :latest)
 Actions:
  Applicable to either Projects, Containers, or Images:
-  --update    # Initiates an update of the named item
+  --update     # Initiates an update of the named item
  Applicable to either Projects or Containers:
-  --start     # Starts the named item
-  --stop      # Stops the named item
-  --restart   # Restarts the named item
+  --start      # Starts the named item
+  --stop       # Stops the named item
+  --restart    # Restarts the named item
+ Applicable to Containers only:
+  --force-stop # Force-stops the named item
+  --reset      # Resets the named item
  Applicable to Projects only:
-  --build     # Creates and starts all containers in the project
-  --clean     # Stops and deletes all containers in the project
+  --build      # Creates and starts all containers in the project
+  --clean      # Stops and deletes all containers in the project
  Applicable to Images only:
-  --prune     # Removes unused images
+  --prune      # Removes unused images
 
 Other:
   --no-ansi   # Force disable ANSI color codes in terminal output
@@ -134,8 +137,16 @@ function process_command_line {
         export ACTION="stop"
         shift
       ;;
+      --force-stop)
+        export ACTION="force-stop"
+        shift
+      ;;
       --restart)
         export ACTION="restart"
+        shift
+      ;;
+      --reset)
+        export ACTION="reset"
         shift
       ;;
       --update)
@@ -159,7 +170,7 @@ function process_command_line {
         shift
       ;;
       *)
-        echo_ansi "Error|Unknown option: $1" >&2
+        echo_ansi "Error: Unknown option: $1" >&2
         usage
         exit 1
       ;;
@@ -242,7 +253,7 @@ function call_api {
   local success
   success=$(echo "$api_response" | jq -crM '.success')
   if [ "$success" != "true" ]; then
-    echo_ansi "Error: API did not return success" >&2
+    echo_ansi "Error: API returned error code: $(echo "$api_response" | jq -sRcrM '. as $raw | try ($raw | fromjson | .error.code) catch $raw')" >&2
     return_code=1
   fi
 
@@ -295,15 +306,16 @@ function get_project_images {
   local response
   response=$(call_api "SYNO.Docker.Project" "get" "id=\"$project_id\"")
   local return_code=$?
+  [ $return_code -ne 0 ] && { echo_ansi "Error: Failed to retrieve project info." >&2; return $return_code; }
 
   # Check that the project is running
   local status
   status=$(echo "$response" | jq -crM '.data.status')
-  if [ "$status" != "RUNNING" ]; then
-    echo_ansi "Error: Project is not running." >&2
-    return 1
+  # status can be RUNNING, WARNING, STOPPED, BUILDING
+  if [ "$status" != "RUNNING" -a "$status" != "WARNING" ]; then
+    echo_ansi "Error: Project is not running, but ${status,,}." >&2
+    return 1${project_status,,}
   fi
-  [ $return_code -ne 0 ] && { echo_ansi "Error: Failed to retrieve project info." >&2; return $return_code; }
   
   local images
   images=$(echo "$response" | jq -crM '.data.containers[].Config.Image')
@@ -313,10 +325,55 @@ function get_project_images {
   fi
   echo "$images"
 }
+function get_project_status {
+  # Get the status for the specified project
+
+  local project_id="$1" # Ex: project_id=6a35cb96-2227-419d-bf64-9c8e91c69410
+
+  local response
+  response=$(call_api "SYNO.Docker.Project" "get" "id=\"$project_id\"")
+  local return_code=$?
+  [ $return_code -ne 0 ] && { echo_ansi "Error: Failed to retrieve project info." >&2; return $return_code; }
+  
+  local status
+  status=$(echo "$response" | jq -crM '.data.status')
+  # status can be RUNNING, WARNING, STOPPED, BUILDING
+  if [ -z "$status" -o "$status" == "null" ]; then
+    echo_ansi "Error: Could not find status for project." >&2
+    return 1
+  fi
+  echo "$status"
+}
+function get_container_status {
+  # Get the status for the specified container
+
+  local container_name="$1" # Ex: container_name=radarr
+
+  local response
+  response=$(call_api "SYNO.Docker.Container" "list" "limit=-1" "offset=0" "type=\"all\"")
+  local return_code=$?
+  [ $return_code -ne 0 ] && { echo_ansi "Error: Failed to retrieve container info." >&2; return $return_code; }
+  
+  local status
+  status=$(echo "$response" | jq -crM '.data.containers[] | select(.name == "'$container_name'") | .status')
+  if [ -z "$status" -o "$status" == "null" ]; then
+    echo_ansi "Error: Could not find status for container." >&2
+    return 1
+  fi
+  echo "$status"
+}
 function start_container {
   # Start the container
 
   local container_name="$1" # Ex: radarr
+
+  local container_status
+  container_status=$(get_container_status "$container_name")
+  local return_code=$?; [ $return_code -ne 0 ] && { return $return_code; }
+  if [ "$container_status" != "stopped" ]; then
+    echo_ansi "Error: Containers in ${container_status} state cannot be started." >&2
+    return 1
+  fi
 
   local response
   response=$(call_api "SYNO.Docker.Container" "start" "name=\"$container_name\"")
@@ -330,6 +387,14 @@ function stop_container {
 
   local container_name="$1" # Ex: radarr
 
+  local container_status
+  container_status=$(get_container_status "$container_name")
+  local return_code=$?; [ $return_code -ne 0 ] && { return $return_code; }
+  if [ "$container_status" != "running" ]; then
+    echo_ansi "Error: Containers in ${container_status} state cannot be stopped." >&2
+    return 1
+  fi
+
   local response
   response=$(call_api "SYNO.Docker.Container" "stop" "name=\"$container_name\"")
   local return_code=$?
@@ -337,10 +402,38 @@ function stop_container {
   
   echo_ansi "Container stop successful"
 }
+function force-stop_container {
+  # Force stop the container
+
+  local container_name="$1" # Ex: radarr
+
+  local container_status
+  container_status=$(get_container_status "$container_name")
+  local return_code=$?; [ $return_code -ne 0 ] && { return $return_code; }
+  if [ "$container_status" != "running" ]; then
+    echo_ansi "Error: Containers in ${container_status} state cannot be force-stopped." >&2
+    return 1
+  fi
+
+  local response
+  response=$(call_api "SYNO.Docker.Container" "signal" "signal=9" "name=\"$container_name\"")
+  local return_code=$?
+  [ $return_code -ne 0 ] && { echo_ansi "Error: Failed to force-stop the container." >&2; return $return_code; }
+  
+  echo_ansi "Container force-stop successful"
+}
 function restart_container {
   # Restart the container
 
   local container_name="$1" # Ex: radarr
+
+  local container_status
+  container_status=$(get_container_status "$container_name")
+  local return_code=$?; [ $return_code -ne 0 ] && { return $return_code; }
+  if [ "$container_status" != "running" ]; then
+    echo_ansi "Error: Containers in ${container_status} state cannot be restarted." >&2
+    return 1
+  fi
 
   local response
   response=$(call_api "SYNO.Docker.Container" "restart" "name=\"$container_name\"")
@@ -378,10 +471,39 @@ function update_container {
 
   echo "-== Update process completed for $container_name container! ==-"
 }
+function reset_container {
+  # Reset the container (delete and recreate)
+
+  local container_name="$1" # Ex: radarr
+
+  local container_status
+  container_status=$(get_container_status "$container_name")
+  local return_code=$?; [ $return_code -ne 0 ] && { return $return_code; }
+  if [ "$container_status" != "stopped" ]; then
+    echo_ansi "Error: Containers in ${container_status} state cannot be reset." >&2
+    return 1
+  fi
+
+  local response
+  response=$(call_api "SYNO.Docker.Container" "delete" "force=false" "preserve_profile=true" "name=\"$container_name\"")
+  local return_code=$?
+  [ $return_code -ne 0 ] && { echo_ansi "Error: Failed to reset the container." >&2; return $return_code; }
+
+  echo_ansi "Container reset successful"
+}
 function start_project {
   # Start the project
+  # Can start a project when status is: STOPPED, WARNING
 
   local project_id="$1" # Ex: project_id=6a35cb96-2227-419d-bf64-9c8e91c69410
+
+  local project_status
+  project_status=$(get_project_status "$project_id")
+  local return_code=$?; [ $return_code -ne 0 ] && { return $return_code; }
+  if [ "$project_status" != "STOPPED" -a "$project_status" != "WARNING" ]; then
+    echo_ansi "Error: Projects in ${project_status,,} state cannot be started." >&2
+    return 1
+  fi
 
   local response
   response=$(call_api "SYNO.Docker.Project" "start" "id=\"$project_id\"")
@@ -392,8 +514,17 @@ function start_project {
 }
 function stop_project {
   # Stop the project
+  # Can stop a project when status is: RUNNING, WARNING
 
   local project_id="$1" # Ex: project_id=6a35cb96-2227-419d-bf64-9c8e91c69410
+
+  local project_status
+  project_status=$(get_project_status "$project_id")
+  local return_code=$?; [ $return_code -ne 0 ] && { return $return_code; }
+  if [ "$project_status" != "RUNNING" -a "$project_status" != "WARNING" ]; then
+    echo_ansi "Error: Projects in ${project_status,,} state cannot be stopped." >&2
+    return 1
+  fi
 
   local response
   response=$(call_api "SYNO.Docker.Project" "stop" "id=\"$project_id\"")
@@ -404,8 +535,17 @@ function stop_project {
 }
 function restart_project {
   # Restart the project
+  # Can restart a project when status is: RUNNING, WARNING
 
   local project_id="$1" # Ex: project_id=6a35cb96-2227-419d-bf64-9c8e91c69410
+
+  local project_status
+  project_status=$(get_project_status "$project_id")
+  local return_code=$?; [ $return_code -ne 0 ] && { return $return_code; }
+  if [ "$project_status" != "RUNNING" -a "$project_status" != "WARNING" ]; then
+    echo_ansi "Error: Projects in ${project_status,,} state cannot be restarted." >&2
+    return 1
+  fi
 
   local response
   response=$(call_api "SYNO.Docker.Project" "restart" "id=\"$project_id\"")
@@ -416,8 +556,17 @@ function restart_project {
 }
 function build_project {
   # Build the project
+  # Can build a project when status is: STOPPED
 
   local project_id="$1" # Ex: project_id=6a35cb96-2227-419d-bf64-9c8e91c69410
+
+  local project_status
+  project_status=$(get_project_status "$project_id")
+  local return_code=$?; [ $return_code -ne 0 ] && { return $return_code; }
+  if [ "$project_status" != "STOPPED" ]; then
+    echo_ansi "Error: Projects in ${project_status,,} state cannot be built." >&2
+    return 1
+  fi
 
   local response
   response=$(call_api "SYNO.Docker.Project" "build_stream" "id=\"$project_id\"")
@@ -428,9 +577,18 @@ function build_project {
 }
 function clean_project {
   # Clean the project (stop and delete containers)
+  # Can clean a project when status is: RUNNING, WARNING, STOPPED
   
   local project_id="$1" # Ex: project_id=6a35cb96-2227-419d-bf64-9c8e91c69410
-  
+
+  local project_status
+  project_status=$(get_project_status "$project_id")
+  local return_code=$?; [ $return_code -ne 0 ] && { return $return_code; }
+  if [ "$project_status" != "RUNNING" -a "$project_status" != "WARNING" -a "$project_status" != "STOPPED" ]; then
+    echo_ansi "Error: Projects in ${project_status,,} state cannot be cleaned." >&2
+    return 1
+  fi
+
   local response
   response=$(call_api "SYNO.Docker.Project" "clean_stream" "id=\"$project_id\"")
   local return_code=$?
@@ -440,6 +598,7 @@ function clean_project {
 }
 function update_project {
   # Update the project
+  # Can update a project when status is: RUNNING
 
   local project_id="$1" # Ex: project_id=6a35cb96-2227-419d-bf64-9c8e91c69410
   echo "-== Starting update process for $PROJECT_NAME project... ==-"
@@ -477,7 +636,7 @@ function update_project {
   echo "-== Update process completed for $PROJECT_NAME project! ==-"
 }
 function get_upgradable_images {
-  # Get a list of upgradable images in the project
+  # Get a list of upgradable images
 
   local response
   response=$(call_api "SYNO.Docker.Image" "list" "limit=-1" "offset=0" "show_dsm=false")
