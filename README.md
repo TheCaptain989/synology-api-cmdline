@@ -8,8 +8,8 @@ The syntax for the command-line is:
 
 ```shell
 call_synology_api.sh {--container|--project|--image} <name>
-    {--start|--stop|--force-stop|--restart|--reset|--update|--build|--clean|--prune}
-    [--no-ansi]
+    {--start|--stop|--force-stop|--restart|--reset|--update|--build|--clean|--prune|--list}
+    [--no-ansi] [--debug]
 ```
 
 You must specify either `--container`, `--project`, or `--image` followed by an action. Not all actions are available for all target types. (Ex: You can't build a container.)
@@ -25,10 +25,12 @@ Option|Argument|Description
 `--restart`||Restarts the named item
 `--reset`||Resets the named item
 `--update`||Initiates an update of the named item
+`--list`||Lists the target items (`<name>` is a dummy argument)
 `--build`||Creates and starts all containers in the project<br/>Only applicable to Projects
 `--clean`||Stops and deletes all containers in the project<br/>Only applicable to Projects
-`--prune`||Removes unused images
+`--prune`||Removes unused images (`<name>` is a dummy argument)
 `--no-ansi`||Force disable ANSI color codes in terminal output
+`--debug`||Enable debug output
 
 ### Matrix of supported actions:
 
@@ -40,6 +42,7 @@ Restart|✅|✅|❌
 Force-Stop|✅|❌|❌
 Reset|✅|❌|❌
 Update|✅|✅|✅
+List|✅|✅|✅
 Build|❌|✅|❌
 Clean|❌|✅|❌
 Prune|❌|❌|✅
@@ -51,4 +54,6 @@ Prune|❌|❌|✅
                             # Updates "my-project"
   call_synology_api.sh --container plex --restart
                             # Restarts plex
+  call_synology_api.sh --project X --list
+                            # Lists all projects
 ```

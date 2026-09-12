@@ -18,11 +18,13 @@ function main {
   # Build function variable to be called
   if [ -n "$PROJECT_NAME" ]; then
     local target="project"
-    # Get project ID
-    local function_arg
-    function_arg=$(get_project_id "$PROJECT_NAME")
-    local return_code=$?
-    [ $return_code -ne 0 ] && { exit $return_code; }
+    if [ "$ACTION" != "list" ]; then
+      # Get project ID
+      local function_arg
+      function_arg=$(get_project_id "$PROJECT_NAME")
+      local return_code=$?
+      [ $return_code -ne 0 ] && { exit $return_code; }
+    fi
   elif [ -n "$CONTAINER_NAME" ]; then
     local target="container"
     local function_arg
@@ -57,8 +59,8 @@ Source and full documentation:
 
 Usage:
   call_synology_api.sh {--container|--project|--image} <name>
-    {--start|--stop|--force-stop|--restart|--reset|--update|--build|--clean|--prune}
-    [--no-ansi]
+    {--start|--stop|--force-stop|--restart|--reset|--update|--build|--clean|--prune|--list}
+    [--no-ansi] [--debug]
 
 Target and Arguments:
   --container <name>
@@ -71,6 +73,7 @@ Target and Arguments:
 Actions:
  Applicable to either Projects, Containers, or Images:
   --update     # Initiates an update of the named item
+  --list       # Lists the target items (<name> is a dummy argument)
  Applicable to either Projects or Containers:
   --start      # Starts the named item
   --stop       # Stops the named item
@@ -82,15 +85,18 @@ Actions:
   --build      # Creates and starts all containers in the project
   --clean      # Stops and deletes all containers in the project
  Applicable to Images only:
-  --prune      # Removes unused images
+  --prune      # Removes unused images (<name> is a dummy argument)
 
 Other:
   --no-ansi   # Force disable ANSI color codes in terminal output
+  --debug     # Enable debug output for troubleshooting
 
 Examples:
   $0 --project my-project --update
 
   $0 --container plex --restart
+
+  $0 --project X --list
 "
   echo "$usage" >&2
 }
@@ -165,8 +171,16 @@ function process_command_line {
         export ACTION="prune"
         shift
       ;;
+      --list)
+        export ACTION="list"
+        shift
+      ;;
       --no-ansi)
         export NOANSI="true"
+        shift
+      ;;
+      --debug)
+        export DEBUG="true"
         shift
       ;;
       *)
@@ -243,9 +257,11 @@ function call_api {
     shift
   done
   
+  [ "$DEBUG" = "true" ] && echo_ansi "Debug: Calling API endpoint=${endpoint}, method=${method}, args=(${syno_data_args[*]})" >&2
   local api_response
   api_response=$(synowebapi -s --exec api="$endpoint" version=1 method="$method" outfile=/dev/null "${syno_data_args[@]}")
   local return_code=$?
+  [ "$DEBUG" = "true" ] && echo_ansi "Debug: api_response=${api_response}" >&2
   if [ $return_code -ne 0 ]; then
     echo_ansi "Error: synowebapi failed with return code $return_code" >&2
   fi
@@ -259,6 +275,24 @@ function call_api {
 
   echo "$api_response"
   return $return_code
+}
+function get_project_list {
+  # Get a list of projects
+
+  local response
+  response=$(call_api "SYNO.Docker.Project" "list")
+  local return_code=$?
+  [ $return_code -ne 0 ] && { echo_ansi "Error: Failed to retrieve project list." >&2; return $return_code; }
+  
+  local project_list
+  project_list=$(echo "$response" | jq -crM '.data | to_entries | map(.value.name) | join(", ")')
+  [ "$DEBUG" = "true" ] && echo_ansi "Debug: project_list=${project_list}" >&2
+
+  if [ -z "$project_list" ]; then
+    echo_ansi "Warn: No projects found." >&2
+    return 1
+  fi
+  echo "$project_list"
 }
 function get_project_id {
   # Get the project ID for the specified docker project name
@@ -314,7 +348,7 @@ function get_project_images {
   # status can be RUNNING, WARNING, STOPPED, BUILDING
   if [ "$status" != "RUNNING" -a "$status" != "WARNING" ]; then
     echo_ansi "Error: Project is not running, but ${status,,}." >&2
-    return 1${project_status,,}
+    return 1
   fi
   
   local images
@@ -337,6 +371,7 @@ function get_project_status {
   
   local status
   status=$(echo "$response" | jq -crM '.data.status')
+  [ "$DEBUG" = "true" ] && echo_ansi "Debug: status=${status}" >&2
   # status can be RUNNING, WARNING, STOPPED, BUILDING
   if [ -z "$status" -o "$status" == "null" ]; then
     echo_ansi "Error: Could not find status for project." >&2
@@ -497,11 +532,26 @@ function start_project {
 
   local project_id="$1" # Ex: project_id=6a35cb96-2227-419d-bf64-9c8e91c69410
 
+  local response
+  response=$(call_api "SYNO.Docker.Project" "get" "id=\"$project_id\"")
+  local return_code=$?
+  [ $return_code -ne 0 ] && { echo_ansi "Error: Failed to retrieve project info." >&2; return $return_code; }
+  
+  # Check project status
   local project_status
-  project_status=$(get_project_status "$project_id")
-  local return_code=$?; [ $return_code -ne 0 ] && { return $return_code; }
+  project_status=$(echo "$response" | jq -crM '.data.status')
+  [ "$DEBUG" = "true" ] && echo_ansi "Debug: status=${project_status}" >&2
+  # status can be RUNNING, WARNING, STOPPED, BUILDING
   if [ "$project_status" != "STOPPED" -a "$project_status" != "WARNING" ]; then
     echo_ansi "Error: Projects in ${project_status,,} state cannot be started." >&2
+    return 1
+  fi
+  # Check for containers
+  local container_count
+  container_count=$(echo "$response" | jq -crM '.data.containerIds | length')
+  [ "$DEBUG" = "true" ] && echo_ansi "Debug: container_count=${container_count}" >&2
+  if [ "$container_count" -eq 0 ]; then
+    echo_ansi "Error: Project has no containers to start.  Try building it first." >&2
     return 1
   fi
 
@@ -716,6 +766,52 @@ function prune_image {
   local message
   message=$(echo "$response" | jq -crM '(.data.ImagesDeleted|length) as $count | (.data.SpaceReclaimed | tostring | gsub("(?<=\\d)(?=(\\d{3})+(?!\\d))"; ",")) as $space | "\($count) images deleted saving \($space) bytes."')
   echo "$message"
+}
+function list_project {
+  # List all projects
+
+  local project_list
+  project_list=$(get_project_list)
+  local return_code=$?
+  [ $return_code -ne 0 ] && { echo_ansi "Error: Failed to retrieve project list." >&2; return $return_code; }
+
+  echo "$project_list"
+}
+function list_container {
+  # List all containers
+
+  local response
+  response=$(call_api "SYNO.Docker.Container" "stats")
+  local return_code=$?
+  [ $return_code -ne 0 ] && { echo_ansi "Error: Failed to retrieve container list." >&2; return $return_code; }
+
+  local container_list
+  container_list=$(echo "$response" | jq -crM '.data | to_entries | map(.value.name | ltrimstr("/")) | join(", ")')
+  [ "$DEBUG" = "true" ] && echo_ansi "Debug: container_list=${container_list}" >&2
+
+  if [ -z "$container_list" ]; then
+    echo_ansi "Warn: No containers found." >&2
+    return 1
+  fi
+  echo "$container_list"
+}
+function list_image {
+  # List all images
+
+  local response
+  response=$(call_api "SYNO.Docker.Image" "list" "limit=-1" "offset=0" "show_dsm=false")
+  local return_code=$?
+  [ $return_code -ne 0 ] && { echo_ansi "Error: Failed to retrieve image list." >&2; return $return_code; }
+
+  local image_list
+  image_list=$(echo "$response" | jq -crM '.data.images | to_entries | map(.value.repository + ":" + (.value.tags | join(","))) | join(", ")')
+  [ "$DEBUG" = "true" ] && echo_ansi "Debug: image_list=${image_list}" >&2
+
+  if [ -z "$image_list" ]; then
+    echo_ansi "Warn: No images found." >&2
+    return 1
+  fi
+  echo "$image_list"
 }
 
 # Do not execute if this script is being sourced from a test script
